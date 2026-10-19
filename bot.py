@@ -2,14 +2,19 @@ import telebot
 import os
 import logging
 import re
+import time
+import threading
+import shutil
+import schedule
 from telebot import types
 from dotenv import load_dotenv
+from migrations import run_migrations # Импортируем наши миграции
 from database import (
-    init_db, get_user_data, update_user_state, clear_user_state,
-    add_habit_to_db, get_user_habits, is_habit_done_today, log_habit_completion
+    get_user_data, update_user_state, clear_user_state,
+    add_habit_to_db, get_user_habits, is_habit_done_today, log_habit_completion,
+    check_habit_owner
 )
 
-# Səhvlərin loq faylına yazılması
 logging.basicConfig(
     level=logging.ERROR,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -20,9 +25,33 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
-init_db()
+# Вместо жесткого init_db запускаем автоматические миграции схемы (Требование шага 2)
+run_migrations()
 
-# /start və /help komandaları
+DB_NAME = "bot_database.db"
+BACKUP_NAME = "bot_database_backup.db"
+
+# Функция автоматического создания резервной копии по расписанию (Требование шага 3)
+def create_backup():
+    try:
+        if os.path.exists(DB_NAME):
+            shutil.copyfile(DB_NAME, BACKUP_NAME)
+            # Фиксируем время создания бэкапа в консоли бота
+            current_time = time.strftime("%Y-%m-%d %H:%M:%S")
+            print(f"💾 [{current_time}] Автоматическая резервная копия базы данных успешно создана.")
+    except Exception as e:
+        logging.error(f"Ошибка при создании автоматического бэкапа: {e}")
+
+# Фоновый планировщик: делает бэкап каждый час (можно настроить на любое время)
+def scheduler_loop():
+    schedule.every().hour.do(create_backup)
+    # Сделаем один бэкап сразу при старте для проверки работы расписания
+    create_backup()
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+# Команды /start и /help
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     try:
@@ -37,7 +66,7 @@ def send_welcome(message):
     except Exception as e:
         logging.error(f"Ошибка в команде start/help: {e}")
 
-# /cancel komandası
+# Команда /cancel
 @bot.message_handler(commands=['cancel'])
 def cancel_process(message):
     try:
@@ -51,7 +80,7 @@ def cancel_process(message):
     except Exception as e:
         logging.error(f"Ошибка в команде cancel: {e}")
 
-# /add komandası
+# Команда /add
 @bot.message_handler(commands=['add'])
 def start_add_habit(message):
     try:
@@ -61,31 +90,27 @@ def start_add_habit(message):
     except Exception as e:
         logging.error(f"Ошибка в начале команды add: {e}")
 
-# YENİ: /list komandası - Vərdişlərin siyahısı və Inline düymələr (Mərhələ 1 və 2)
+# Команда /list
 @bot.message_handler(commands=['list'])
 def list_habits(message):
     try:
         user_id = message.from_user.id
-        habits = get_user_habits(user_id) # Məlumatların izolyasiyası - yalnız özününkülər gəlir
+        habits = get_user_habits(user_id)
 
         if not habits:
             bot.reply_to(message, "У вас пока нет созданных привычек. Добавьте их с помощью /add!")
             return
 
-        # Klaviatura düymələri və mətnin qurulması
         markup = types.InlineKeyboardMarkup()
         text_lines = ["📋 **Твои привычки на сегодня:**\n"]
 
         for index, habit in enumerate(habits, start=1):
             habit_id, name = habit
             done = is_habit_done_today(habit_id)
-
-            # Status işarəsi (Meyar 1)
             status_emoji = "✅ отмечено" if done else "❌ нет"
             text_lines.append(f"{index}. {name} — {status_emoji}")
 
-            # Əgər bu gün qeyd edilməyibsə düymə yaradılır (Meyar 2)
-            if not done:     
+            if not done:
                 button = types.InlineKeyboardButton(text=f"Отметить: {name}", callback_data=f"done_{habit_id}")
                 markup.add(button)
 
@@ -93,25 +118,26 @@ def list_habits(message):
     except Exception as e:
         logging.error(f"Ошибка в команде list: {e}")
 
-# YENİ: İncə toxunuşla işarələmə (Callback query handler) və İkiqat klik qoruması (Meyar 2 və 4)
+# Обработка клика inline-кнопки с проверкой владельца
 @bot.callback_query_handler(func=lambda call: call.data.startswith('done_'))
 def handle_habit_click(call):
     try:
-        habit_id = int(call.data.split('_')[1])
+        user_id = call.from_user.id
+        habit_id = int(call.data.split('_'))
 
-        # Bu gün artıq kliklənib-kliklənmədiyini yoxlayırıq (Daxili qoruma)
+        if not check_habit_owner(habit_id, user_id):
+            bot.answer_callback_query(call.id, text="⚠️ Ошибка доступа: Это не ваша привычка!", show_alert=True)
+            return
+
         if is_habit_done_today(habit_id):
             bot.answer_callback_query(call.id, text="⚠️ Эта привычка уже была отмечена сегодня!", show_alert=True)
             return
 
-        # Bazada qeyd edirik
         success = log_habit_completion(habit_id)
 
         if success:
             bot.answer_callback_query(call.id, text="🎉 Привычка успешно отмечена!")
 
-            # Ekranda siyahını dərhal yeniləyirik ki, status "✅ отмечено" olsun
-            user_id = call.from_user.id
             habits = get_user_habits(user_id)
             markup = types.InlineKeyboardMarkup()
             text_lines = ["📋 **Твои привычки на сегодня:**\n"]
@@ -132,13 +158,10 @@ def handle_habit_click(call):
                 reply_markup=markup,
                 parse_mode="Markdown"
             )
-        else:
-            bot.answer_callback_query(call.id, text="⚠️ Ошибка: Двойная отметка за день невозможна!", show_alert=True)
-
     except Exception as e:
-        logging.error(f"Ошибка в обработке клика inline-кнопки: {e}")
+        logging.error(f"Ошибка в обработке клика кнопки: {e}")
 
-# Naməlum komandaların tutulması
+# Обработка неизвестных команд
 @bot.message_handler(func=lambda message: message.text and message.text.startswith('/'))
 def unknown_command(message):
     try:
@@ -146,7 +169,7 @@ def unknown_command(message):
     except Exception as e:
         logging.error(f"Ошибка неизвестной команды: {e}")
 
-# FSM Dialoq mətn ötürücüsü
+# FSM диалог создания привычки
 @bot.message_handler(func=lambda message: True)
 def handle_dialogue(message):
     try:
@@ -180,15 +203,15 @@ def handle_dialogue(message):
                 bot.reply_to(message, "❌ Неверный формат времени! Пожалуйста, введите ЧЧ:ММ:")
                 return
 
-            # FSM bitəndə məlumatı həqiqi "habits" cədvəlinə yazırıq
             add_habit_to_db(user_id, user_data["name"], user_data["frequency"], text)
-
-            bot.reply_to(message, f"🎉 Привычка **{user_data['name']}** успешно создана и сохранена! Проверьте список через /list.", parse_mode="Markdown")
+            bot.reply_to(message, f"🎉 Привычка **{user_data['name']}** успешно создана! Проверьте список через /list.", parse_mode="Markdown")
             clear_user_state(user_id)
 
     except Exception as e:
         logging.error(f"Критическая ошибка в диалоге: {e}")
-
 if __name__ == "__main__":
+    # Запускаем фоновый поток для планировщика автоматических бэкапов
+    threading.Thread(target=scheduler_loop, daemon=True).start()
+
     print("Бот успешно запущен...")
     bot.infinity_polling()
