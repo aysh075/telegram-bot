@@ -43,7 +43,7 @@ def create_backup():
 # Изменено: Умный расчет времени с учетом часового пояса пользователя (Критерии 1, 2, 3)
 def send_reminders():
     try:
-        utc_now = datetime.utcnow()
+        utc_now = datetime.now(datetime.timezone.utc).replace(tzinfo=None)
         habits = get_all_habits_for_reminders()
 
         for habit_id, user_id, name, habit_time, tz_offset in habits:
