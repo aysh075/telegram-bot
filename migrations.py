@@ -18,14 +18,15 @@ def run_migrations():
         )
     ''')
 
-    # 2. Таблица самих привычек
+    # 2. Таблица самих привычек (добавлено поле timezone_offset)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS habits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER,
             name TEXT,
             frequency TEXT,
-            time TEXT
+            time TEXT,
+            timezone_offset INTEGER DEFAULT 0
         )
     ''')
 
@@ -39,7 +40,7 @@ def run_migrations():
         )
     ''')
 
-    # Создание дополнительных индексов для ускорения поиска (Требование шага 1)
+    # Создание дополнительных индексов для ускорения поиска
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_habits_user ON habits(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_date ON habit_logs(date)")
 

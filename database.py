@@ -2,36 +2,8 @@ import sqlite3
 from datetime import datetime
 
 def init_db():
-    conn = sqlite3.connect("bot_database.db")
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS user_states (
-            user_id INTEGER PRIMARY KEY,
-            state TEXT,
-            habit_name TEXT,
-            habit_frequency TEXT,
-            habit_time TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS habits (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            name TEXT,
-            frequency TEXT,
-            time TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS habit_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            habit_id INTEGER,
-            date TEXT,
-            UNIQUE(habit_id, date) ON CONFLICT IGNORE
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    # Миграции теперь запускаются отдельно, но оставим для совместимости
+    pass
 
 def get_user_data(user_id):
     conn = sqlite3.connect("bot_database.db")
@@ -40,7 +12,7 @@ def get_user_data(user_id):
     row = cursor.fetchone()
     conn.close()
     if row:
-        return {"state": row, "name": row, "frequency": row, "time": row}
+        return {"state": row[0], "name": row[1], "frequency": row[2], "time": row[3]}
     return {"state": None, "name": None, "frequency": None, "time": None}
 
 def update_user_state(user_id, state=None, name=None, frequency=None, time=None):
@@ -65,10 +37,12 @@ def clear_user_state(user_id):
     conn.commit()
     conn.close()
 
-def add_habit_to_db(user_id, name, frequency, time):
+# Изменено: теперь сохраняется и часовой пояс (по умолчанию UTC+3 или вводится пользователем)
+def add_habit_to_db(user_id, name, frequency, time, timezone_offset=0):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO habits (user_id, name, frequency, time) VALUES (?, ?, ?, ?)", (user_id, name, frequency, time))
+    cursor.execute("INSERT INTO habits (user_id, name, frequency, time, timezone_offset) VALUES (?, ?, ?, ?, ?)",
+                   (user_id, name, frequency, time, timezone_offset))
     conn.commit()
     conn.close()
 
@@ -102,7 +76,6 @@ def log_habit_completion(habit_id):
     conn.close()
     return success
 
-# Mentorun tələb etdiyi yoxlama funksiyası
 def check_habit_owner(habit_id, user_id):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
@@ -110,3 +83,20 @@ def check_habit_owner(habit_id, user_id):
     row = cursor.fetchone()
     conn.close()
     return row is not None
+
+# Новое: получение всех привычек вместе с часовым поясом и их id
+def get_all_habits_for_reminders():
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, user_id, name, time, timezone_offset FROM habits")
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+# Новое: удаление всех напоминаний пользователя одной командой (Критерий 4)
+def delete_all_user_habits(user_id):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM habits WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()

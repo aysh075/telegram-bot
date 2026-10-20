@@ -6,13 +6,14 @@ import time
 import threading
 import shutil
 import schedule
+from datetime import datetime, timedelta
 from telebot import types
 from dotenv import load_dotenv
-from migrations import run_migrations # Импортируем наши миграции
+from migrations import run_migrations
 from database import (
     get_user_data, update_user_state, clear_user_state,
     add_habit_to_db, get_user_habits, is_habit_done_today, log_habit_completion,
-    check_habit_owner
+    check_habit_owner, get_all_habits_for_reminders, delete_all_user_habits
 )
 
 logging.basicConfig(
@@ -25,48 +26,77 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Вместо жесткого init_db запускаем автоматические миграции схемы (Требование шага 2)
 run_migrations()
 
 DB_NAME = "bot_database.db"
 BACKUP_NAME = "bot_database_backup.db"
 
-# Функция автоматического создания резервной копии по расписанию (Требование шага 3)
 def create_backup():
     try:
         if os.path.exists(DB_NAME):
             shutil.copyfile(DB_NAME, BACKUP_NAME)
-            # Фиксируем время создания бэкапа в консоли бота
             current_time = time.strftime("%Y-%m-%d %H:%M:%S")
             print(f"💾 [{current_time}] Автоматическая резервная копия базы данных успешно создана.")
     except Exception as e:
-        logging.error(f"Ошибка при создании автоматического бэкапа: {e}")
+        logging.error(f"Ошибка при создании бэкапа: {e}")
 
-# Фоновый планировщик: делает бэкап каждый час (можно настроить на любое время)
+# Изменено: Умный расчет времени с учетом часового пояса пользователя (Критерии 1, 2, 3)
+def send_reminders():
+    try:
+        utc_now = datetime.utcnow()
+        habits = get_all_habits_for_reminders()
+
+        for habit_id, user_id, name, habit_time, tz_offset in habits:
+            # Если привычка сегодня уже выполнена, то не шлем напоминание (Критерий 3)
+            if is_habit_done_today(habit_id):
+                continue
+
+            # Вычисляем текущее местное время пользователя на основе серверного UTC
+            user_local_time = utc_now + timedelta(hours=tz_offset)
+            current_time_str = user_local_time.strftime("%H:%M")
+
+            if habit_time == current_time_str:
+                bot.send_message(
+                    user_id,
+                    f"🕒 Местное время {current_time_str}! Не забудь выполнить свою привычку: **{name}**!\nОтметь её через /list.",
+                    parse_mode="Markdown"
+                )
+    except Exception as e:
+        logging.error(f"Ошибка в отправке напоминаний: {e}")
+
 def scheduler_loop():
+    schedule.every().minute.do(send_reminders)
     schedule.every().hour.do(create_backup)
-    # Сделаем один бэкап сразу при старте для проверки работы расписания
     create_backup()
     while True:
         schedule.run_pending()
         time.sleep(1)
 
-# Команды /start и /help
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     try:
         clear_user_state(message.from_user.id)
         help_text = (
-            "Привет! Я помогу тебе управлять полезными привычками.\n\n"
+            "Привет! Я помогу тебе управлять полезными привычками с учетом твоего времени.\n\n"
             "📌 /add - Создать новую привычку\n"
-            "📌 /list - Показать список моих привычек на сегодня\n"
+            "📌 /list - Показать список привычек на сегодня\n"
+            "📌 /off - Отключить все напоминания разом\n"
             "📌 /cancel - Отменить текущий диалог"
         )
         bot.reply_to(message, help_text)
     except Exception as e:
         logging.error(f"Ошибка в команде start/help: {e}")
 
-# Команда /cancel
+# Новое: Отключение всех напоминаний одной командой (Критерий 4)
+@bot.message_handler(commands=['off'])
+def turn_off_all_reminders(message):
+    try:
+        user_id = message.from_user.id
+        delete_all_user_habits(user_id)
+        bot.reply_to(message, "📴 Все ваши привычки и напоминания успешно удалены одной командой!")
+    except Exception as e:
+        logging.error(f"Ошибка в команде /off: {e}")
+
 @bot.message_handler(commands=['cancel'])
 def cancel_process(message):
     try:
@@ -80,17 +110,15 @@ def cancel_process(message):
     except Exception as e:
         logging.error(f"Ошибка в команде cancel: {e}")
 
-# Команда /add
 @bot.message_handler(commands=['add'])
 def start_add_habit(message):
     try:
         user_id = message.from_user.id
         update_user_state(user_id, state="WAITING_NAME")
-        bot.reply_to(message, "📝 Шаг 1/3: Введите название новой привычки:")
+        bot.reply_to(message, "📝 Шаг 1/4: Введите название новой привычки:")
     except Exception as e:
         logging.error(f"Ошибка в начале команды add: {e}")
 
-# Команда /list
 @bot.message_handler(commands=['list'])
 def list_habits(message):
     try:
@@ -118,7 +146,6 @@ def list_habits(message):
     except Exception as e:
         logging.error(f"Ошибка в команде list: {e}")
 
-# Обработка клика inline-кнопки с проверкой владельца
 @bot.callback_query_handler(func=lambda call: call.data.startswith('done_'))
 def handle_habit_click(call):
     try:
@@ -126,18 +153,17 @@ def handle_habit_click(call):
         habit_id = int(call.data.split('_'))
 
         if not check_habit_owner(habit_id, user_id):
-            bot.answer_callback_query(call.id, text="⚠️ Ошибка доступа: Это не ваша привычка!", show_alert=True)
+            bot.answer_callback_query(call.id, text="⚠️ Ошибка доступа!", show_alert=True)
             return
 
         if is_habit_done_today(habit_id):
-            bot.answer_callback_query(call.id, text="⚠️ Эта привычка уже была отмечена сегодня!", show_alert=True)
+            bot.answer_callback_query(call.id, text="⚠️ Эта привычка уже отмечена сегодня!", show_alert=True)
             return
 
         success = log_habit_completion(habit_id)
 
         if success:
             bot.answer_callback_query(call.id, text="🎉 Привычка успешно отмечена!")
-
             habits = get_user_habits(user_id)
             markup = types.InlineKeyboardMarkup()
             text_lines = ["📋 **Твои привычки на сегодня:**\n"]
@@ -161,7 +187,6 @@ def handle_habit_click(call):
     except Exception as e:
         logging.error(f"Ошибка в обработке клика кнопки: {e}")
 
-# Обработка неизвестных команд
 @bot.message_handler(func=lambda message: message.text and message.text.startswith('/'))
 def unknown_command(message):
     try:
@@ -169,7 +194,6 @@ def unknown_command(message):
     except Exception as e:
         logging.error(f"Ошибка неизвестной команды: {e}")
 
-# FSM диалог создания привычки
 @bot.message_handler(func=lambda message: True)
 def handle_dialogue(message):
     try:
@@ -178,40 +202,57 @@ def handle_dialogue(message):
         current_state = user_data["state"]
 
         if not current_state:
-            bot.reply_to(message, "Я вижу твое сообщение, но давай начнем с главного: введи команду /add, чтобы завести привычку!")
+            bot.reply_to(message, "Используйте /add, чтобы завести привычку!")
             return
 
         text = message.text.strip() if message.text else ""
 
         if current_state == "WAITING_NAME":
             if not text:
-                bot.reply_to(message, "❌ Название привычки не может быть пустым.")
+                bot.reply_to(message, "❌ Название не может быть пустым.")
                 return
             update_user_state(user_id, state="WAITING_FREQUENCY", name=text)
-            bot.reply_to(message, "🔄 Шаг 2/3: Как часто вы хотите этим заниматься?:")
+            bot.reply_to(message, "🔄 Шаг 2/4: Как часто вы хотите этим заниматься?:")
 
         elif current_state == "WAITING_FREQUENCY":
             if not text:
-                bot.reply_to(message, "❌ Пожалуйста, укажите частоту:")
+                bot.reply_to(message, "❌ Укажите частоту:")
                 return
             update_user_state(user_id, state="WAITING_TIME", frequency=text)
-            bot.reply_to(message, "🕒 Шаг 3/3: Укажите время для напоминания в формате ЧЧ:ММ:")
+            bot.reply_to(message, "🕒 Шаг 3/4: Укажите местное время напоминания в формате ЧЧ:ММ:")
 
         elif current_state == "WAITING_TIME":
             time_match = re.match(r"^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$", text)
             if not time_match:
-                bot.reply_to(message, "❌ Неверный формат времени! Пожалуйста, введите ЧЧ:ММ:")
+                bot.reply_to(message, "❌ Неверный формат! Введите ЧЧ:ММ:")
+                return
+            update_user_state(user_id, state="WAITING_TZ", time=text)
+            # Шаг 4: Явный запрос часового пояса у пользователя (Критерий 1)
+            bot.reply_to(message, "🌍 Шаг 4/4: Введите смещение вашего часового пояса от UTC (например, +3 для Москвы, +4 для Баку, или -5 для Нью-Йорка):")
+
+        elif current_state == "WAITING_TZ":
+            # Валидация числового ввода часового пояса
+            try:
+                tz_offset = int(text.replace("+", ""))
+                if not (-12 <= tz_offset <= 14):
+                    raise ValueError
+            except ValueError:
+                bot.reply_to(message, "❌ Неверный часовой пояс! Введите число от -12 до +14:")
                 return
 
-            add_habit_to_db(user_id, user_data["name"], user_data["frequency"], text)
-            bot.reply_to(message, f"🎉 Привычка **{user_data['name']}** успешно создана! Проверьте список через /list.", parse_mode="Markdown")
+            add_habit_to_db(user_id, user_data["name"], user_data["frequency"], user_data["time"], tz_offset)
+            bot.reply_to(
+                message,
+                f"🎉 Привычка **{user_data['name']}** успешно создана! Напоминание придет в {user_data['time']} по вашему местному времени (UTC{text if tz_offset < 0 else '+' + str(tz_offset)}).",
+                parse_mode="Markdown"
+            )
             clear_user_state(user_id)
 
     except Exception as e:
         logging.error(f"Критическая ошибка в диалоге: {e}")
+
 if __name__ == "__main__":
-    # Запускаем фоновый поток для планировщика автоматических бэкапов
-    threading.Thread(target=scheduler_loop, daemon=True).start()
+    threading.Thread(target=scheduler_loop,daemon=True).start()
 
     print("Бот успешно запущен...")
     bot.infinity_polling()
