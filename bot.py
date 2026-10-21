@@ -150,7 +150,7 @@ def list_habits(message):
 def handle_habit_click(call):
     try:
         user_id = call.from_user.id
-        habit_id = int(call.data.split('_'))
+        habit_id = int(call.data.split('_')[1])
 
         if not check_habit_owner(habit_id, user_id):
             bot.answer_callback_query(call.id, text="⚠️ Ошибка доступа!", show_alert=True)

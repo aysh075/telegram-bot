@@ -41,8 +41,7 @@ def clear_user_state(user_id):
 def add_habit_to_db(user_id, name, frequency, time, timezone_offset=0):
     conn = sqlite3.connect("bot_database.db")
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO habits (user_id, name, frequency, time, timezone_offset) VALUES (?, ?, ?, ?, ?)",
-                   (user_id, name, frequency, time, timezone_offset))
+    cursor.execute("INSERT INTO habits (user_id, name, frequency, time, timezone_offset) VALUES (?, ?, ?, ?, ?)",(user_id, name, frequency, time, timezone_offset))
     conn.commit()
     conn.close()
 
