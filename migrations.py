@@ -3,11 +3,10 @@ import sqlite3
 DB_NAME = "bot_database.db"
 
 def run_migrations():
-    print("⏳ Запуск миграций базы данных...")
+    print("⏳ Запуск миграций базы данных для 7-го этапа...")
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    # 1. Таблица состояний FSM пользователей
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_states (
             user_id INTEGER PRIMARY KEY,
@@ -18,7 +17,6 @@ def run_migrations():
         )
     ''')
 
-    # 2. Таблица самих привычек (добавлено поле timezone_offset)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS habits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,11 +24,11 @@ def run_migrations():
             name TEXT,
             frequency TEXT,
             time TEXT,
-            timezone_offset INTEGER DEFAULT 0
+            timezone_offset INTEGER DEFAULT 0,
+            is_active INTEGER DEFAULT 1
         )
     ''')
 
-    # 3. Таблица выполнения привычек с уникальным индексом
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS habit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,13 +38,12 @@ def run_migrations():
         )
     ''')
 
-    # Создание дополнительных индексов для ускорения поиска
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_habits_user ON habits(user_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_logs_date ON habit_logs(date)")
 
     conn.commit()
     conn.close()
-    print("✅ Миграции успешно применены! Схема базы данных поднята.")
+    print("✅ Миграции успешно применены!")
 
 if __name__ == "__main__":
     run_migrations()
