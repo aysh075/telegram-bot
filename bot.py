@@ -45,7 +45,7 @@ def create_backup():
     except Exception as e:
         logging.error(f"Ошибка бэкапа: {e}")
 
-def safe_send_reminder(user_id, text):
+def safe_send_reminder(user_id, text, habit_id=None):
     delays = [1,5,15] # Повторы с нарастающей паузой
     for attempt, delay in enumerate(delays, start=1):
         try:
@@ -63,6 +63,8 @@ def safe_send_reminder(user_id, text):
         except Exception as e:
             logging.error(f"Ошибка отправки пользователю {user_id}: {e}")
             time.sleep(delay)
+    logging.warning(f"Не удалось отправить напоминание пользователю {user_id} после нескольких попыток.")
+    threading.Timer(300,safe_send_reminder, args=[user_id, text, habit_id]).start()
     return False
 
 def send_reminders():
@@ -76,7 +78,7 @@ def send_reminders():
             current_time_str = user_local_time.strftime("%H:%M")
             if habit_time == current_time_str:
                 reminder_text = f"🕒 Время {current_time_str}! Пора выполнить вашу привычку: **{name}**!\nОтметьте её через /list."
-                threading.Thread(target=safe_send_reminder, args=(user_id, reminder_text), daemon=True).start()
+                threading.Thread(target=safe_send_reminder, args=(user_id, reminder_text, habit_id), daemon=True).start()
     except Exception as e:
         logging.error(f"Ошибка в планировщике: {e}")
 
