@@ -46,7 +46,7 @@ def create_backup():
         logging.error(f"Ошибка бэкапа: {e}")
 
 def safe_send_reminder(user_id, text, habit_id=None):
-    delays = [1,5,15] # Повторы с нарастающей паузой
+    delays = [1,5,15] 
     for attempt, delay in enumerate(delays, start=1):
         try:
             bot.send_message(user_id, text, parse_mode="Markdown")
@@ -54,7 +54,7 @@ def safe_send_reminder(user_id, text, habit_id=None):
             return True
         except ApiTelegramException as e:
             if e.error_code == 403:
-                logging.warning(f"Пользователь {user_id} заблокировал бота. Отключаем.")
+                logging.warning(f"Ошибка 403:Пользователь {user_id} заблокировал бота. Отключаем напоминания.")
                 deactivate_user_habits(user_id)
                 return False
             logging.error(f"Сбой сети для пользователя {user_id} (Попытка {attempt}): {e}")
@@ -63,12 +63,12 @@ def safe_send_reminder(user_id, text, habit_id=None):
         except Exception as e:
             logging.error(f"Ошибка отправки пользователю {user_id}: {e}")
             time.sleep(delay)
-    logging.warning(f"Не удалось отправить напоминание пользователю {user_id} после нескольких попыток.")
+    logging.warning(f"Сетъ недоступна.Переносим отправку напоминания пользователю{user_id} на 5 минут. ")
     threading.Timer(300,safe_send_reminder, args=[user_id, text, habit_id]).start()
     return False
 
 def send_reminders():
-    try:
+    try
         utc_now = datetime.now(dt.timezone.utc).replace(tzinfo=None)
         habits = get_all_habits_for_reminders()
         for habit_id, user_id, name, habit_time, tz_offset in habits:
