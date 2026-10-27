@@ -7,6 +7,7 @@ def run_migrations():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
+    # 1. Таблица состояний FSM
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_states (
             user_id INTEGER PRIMARY KEY,
@@ -17,6 +18,7 @@ def run_migrations():
         )
     ''')
 
+    # 2. Таблица привычек
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS habits (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,12 +31,24 @@ def run_migrations():
         )
     ''')
 
+    # 3. Таблица выполнения привычек
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS habit_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             habit_id INTEGER,
             date TEXT,
             UNIQUE(habit_id, date) ON CONFLICT IGNORE
+        )
+    ''')
+
+    # 4. Требование 3: Таблица для сохранения напоминаний при перезапуске бота
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_reminders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            habit_id INTEGER,
+            text TEXT,
+            status TEXT DEFAULT 'pending'
         )
     ''')
 

@@ -16,7 +16,8 @@ from database import (
     get_user_data, update_user_state, clear_user_state,
     add_habit_to_db, get_user_habits, is_habit_done_today, log_habit_completion,
     check_habit_owner, get_all_habits_for_reminders, delete_all_user_habits,
-    deactivate_user_habits
+    deactivate_user_habits, save_pending_reminder, mark_reminder_as_sent,
+    get_all_pending_reminders
 )
 
 logging.basicConfig(
@@ -45,30 +46,49 @@ def create_backup():
     except Exception as e:
         logging.error(f"Ошибка бэкапа: {e}")
 
+# Замечание 2 и 3: Механизм отправки с фиксацией в Базе Данных и двоеточием на месте
 def safe_send_reminder(user_id, text, habit_id=None):
-    delays = [1,5,15] 
+    delays =[1,5,15]
+# Записываем в базу данных как неотправленное (защита от перезапуска)
+    if habit_id:
+        save_pending_reminder(user_id, habit_id, text)
+
     for attempt, delay in enumerate(delays, start=1):
         try:
             bot.send_message(user_id, text, parse_mode="Markdown")
             logging.info(f"Напоминание пользователю {user_id} успешно доставлено.")
+            if habit_id:
+                mark_reminder_as_sent(user_id, habit_id)
             return True
         except ApiTelegramException as e:
             if e.error_code == 403:
-                logging.warning(f"Ошибка 403:Пользователь {user_id} заблокировал бота. Отключаем напоминания.")
+                logging.warning(f"Ошибка 403: Пользователь {user_id} заблокировал бота. Отключаем напоминания.")
                 deactivate_user_habits(user_id)
                 return False
             logging.error(f"Сбой сети для пользователя {user_id} (Попытка {attempt}): {e}")
             if attempt < len(delays):
-                time.sleep(delay)
+               time.sleep(delay)
         except Exception as e:
             logging.error(f"Ошибка отправки пользователю {user_id}: {e}")
             time.sleep(delay)
-    logging.warning(f"Сетъ недоступна.Переносим отправку напоминания пользователю{user_id} на 5 минут. ")
-    threading.Timer(300,safe_send_reminder, args=[user_id, text, habit_id]).start()
+
+    logging.warning(f"Сеть недоступна. Переносим отправку напоминания пользователю {user_id} на 5 минут.")
+    threading.Timer(300, safe_send_reminder, args=[user_id, text, habit_id]).start()
     return False
 
+# Замечание 3: Функция поднятия неотправленной очереди из базы данных при старте
+def restore_queue_on_start():
+    try:
+        pending = get_all_pending_reminders()
+        if pending:
+            logging.info(f"Найдено {len(pending)} неотправленных напоминаний в БД. Восстанавливаем очередь.")
+            for user_id, habit_id, text in pending:
+                threading.Thread(target=safe_send_reminder, args=(user_id, text, habit_id), daemon=True).start()
+    except Exception as e:
+        logging.error(f"Ошибка восстановления очереди задач: {e}")
+
 def send_reminders():
-    try
+    try:
         utc_now = datetime.now(dt.timezone.utc).replace(tzinfo=None)
         habits = get_all_habits_for_reminders()
         for habit_id, user_id, name, habit_time, tz_offset in habits:
@@ -80,7 +100,7 @@ def send_reminders():
                 reminder_text = f"🕒 Время {current_time_str}! Пора выполнить вашу привычку: **{name}**!\nОтметьте её через /list."
                 threading.Thread(target=safe_send_reminder, args=(user_id, reminder_text, habit_id), daemon=True).start()
     except Exception as e:
-        logging.error(f"Ошибка в планировщике: {e}")
+        logging.error(f"Ошибка в планировщике напоминаний: {e}")
 
 def scheduler_loop():
     schedule.every().minute.do(send_reminders)
@@ -111,7 +131,7 @@ def turn_off_all_reminders(message):
     try:
         user_id = message.from_user.id
         delete_all_user_habits(user_id)
-        logging.info(f"Пользователь {user_id} вызвал /off.")
+        logging.info(f"Пользователь {user_id} отключил все напоминания.")
         bot.reply_to(message, "📴 Все ваши привычки и напоминания успешно удалены!")
     except Exception as e:
         logging.error(f"Ошибка команды /off: {e}")
@@ -164,7 +184,7 @@ def list_habits(message):
 def handle_habit_click(call):
     try:
         user_id = call.from_user.id
-        habit_id = int(call.data.split('_')[1])
+        habit_id = int(call.data.split('_'))
         if not check_habit_owner(habit_id, user_id):
             bot.answer_callback_query(call.id, text="⚠️ Ошибка доступа!", show_alert=True)
             return
@@ -174,7 +194,7 @@ def handle_habit_click(call):
         success = log_habit_completion(habit_id)
         if success:
             bot.answer_callback_query(call.id, text="🎉 Привычка успешно отмечена!")
-            logging.info(f"Пользователь {user_id} отметил привычку {habit_id}.")
+            logging.info(f"Пользователь {user_id} успешно отметил привычку {habit_id}.")
             habits = get_user_habits(user_id)
             markup = types.InlineKeyboardMarkup()
             text_lines = ["📋 **Твои привычки на сегодня:**\n"]
@@ -247,7 +267,8 @@ def handle_dialogue(message):
     except Exception as e:
         logging.error(f"Критическая ошибка в диалоге: {e}")
 if __name__ == "__main__":
+    restore_queue_on_start()
     if threading.current_thread() is threading.main_thread():
-        threading.Thread(target=scheduler_loop, daemon=True).start()
+       threading.Thread(target=scheduler_loop, daemon=True).start()
     logging.info("Бот успешно инициализирован в системе.")
-    bot.infinity_polling()   
+    bot.infinity_polling()

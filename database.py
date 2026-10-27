@@ -100,6 +100,31 @@ def delete_all_user_habits(user_id):
     cursor.execute("DELETE FROM habits WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
+ 
+def save_pending_reminder(user_id,habit_id,text):
+    conn =sqlite3.connect("bot_database.db")
+    cursor =conn.cursor()
+    cursor.execute("INSERT INTO pending_reminders(user_id,habit_id,text,status)VALUES(?,?,?,'pending')",
+                   (uer_id,habit_id,text))
+    conn.commit()
+    conn.close()
+
+def mark_reminder_as_sent(user_id, habit_id):
+    conn = sqlite3.connect("bot_database.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE pending_reminders SET status = 'sent' WHERE user_id = ? AND habit_id = ? AND status = 'pending'", (user_id, habit_id))
+    conn.commit()
+    conn.close()
+
+def get_all_pending_reminders():
+    conn = sqlite3.connect("bot_database.db")
+    cursor =conn.cursor()
+    cursor.execute("SELECT user-id,habit-id,text FROM pending_reminders WHERE status ='pending'")
+    rows =cursor.fetchall()
+    conn.close()
+    return rows
+    
+
 
 def calculate_streak(logs_dates_list, target_date_str):
     if not logs_dates_list:
