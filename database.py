@@ -105,7 +105,7 @@ def save_pending_reminder(user_id,habit_id,text):
     conn =sqlite3.connect("bot_database.db")
     cursor =conn.cursor()
     cursor.execute("INSERT INTO pending_reminders(user_id,habit_id,text,status)VALUES(?,?,?,'pending')",
-                   (uer_id,habit_id,text))
+                   (user_id,habit_id,text))
     conn.commit()
     conn.close()
 
@@ -119,7 +119,7 @@ def mark_reminder_as_sent(user_id, habit_id):
 def get_all_pending_reminders():
     conn = sqlite3.connect("bot_database.db")
     cursor =conn.cursor()
-    cursor.execute("SELECT user-id,habit-id,text FROM pending_reminders WHERE status ='pending'")
+    cursor.execute("SELECT user_id,habit_id,text FROM pending_reminders WHERE status ='pending'")
     rows =cursor.fetchall()
     conn.close()
     return rows
